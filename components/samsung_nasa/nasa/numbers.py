@@ -92,7 +92,8 @@ numbers = {
     0x42F1: {
         NASA_LABEL: "VAR_OUT_COMP_FREQ_RATE_CONTROL",
         NASA_MODE: CONTROLLER_MODE_CONTROL,
-        CONF_DATA: cmd_numeric_data(50, 150, 1.0)        
+        CONF_DATA: cmd_numeric_data(50, 150, 1.0),
+        CONF_DEFAULTS: temperature_defaults()        
     },
     0x42D6: {
         NASA_LABEL: "VAR_IN_TEMP_TARGET_ZONE2_F",
