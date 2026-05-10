@@ -7,6 +7,8 @@
 #include "esphome/components/number/number.h"
 #include "esphome/components/switch/switch.h"
 #include <map>
+#include <string>
+#include <vector>
 
 namespace esphome {
 namespace samsung_nasa {
@@ -30,6 +32,8 @@ class NASA_Climate : public climate::Climate, public Component {
   climate::ClimateCall make_call() { return climate::ClimateCall(this); }
   void set_power_switch(switch_::Switch *power) { this->power_ = power; };
   void set_target_temp(number::Number *target_temp) { this->target_temp_ = target_temp; };
+  void set_target_mode_select(select::Select *target_mode_select) { this->target_mode_select_ = target_mode_select; }
+  void add_target_mode(const std::string &preset, const std::string &select_option, number::Number *target_temp);
   void set_current_temp(sensor::Sensor *current_temp) { this->current_temp_ = current_temp; }
   void set_action_sensor(sensor::Sensor *action_sens) { this->action_sens_ = action_sens; }
   void set_action_map(ClimateActionMap *mappings) { this->mappings_ = mappings; }
@@ -39,18 +43,29 @@ class NASA_Climate : public climate::Climate, public Component {
  protected:
   void control(const climate::ClimateCall &call) override;
   void on_power(bool state);
-  void on_target_temp(float state);
+  void on_target_temp(number::Number *source, float state);
   void on_current_temp(float state);
   void on_action_sens(float state);
   void on_preset_select(std::string state, size_t index);
+  void on_target_mode_select(std::string state, size_t index);
   bool update_mode(climate::ClimateMode new_mode);
   bool update_current_temp(float new_temp);
   bool update_target_temp(float new_temp);
   bool update_custom_preset(const char* new_value);
+  number::Number *active_target_temp_();
+  bool update_target_temp_from_(number::Number *target);
   climate::ClimateTraits traits() override;
+
+  struct TargetMode {
+    std::string preset;
+    std::string select_option;
+    number::Number *target_temp;
+  };
 
   switch_::Switch *power_{nullptr};
   number::Number *target_temp_{nullptr};
+  select::Select *target_mode_select_{nullptr};
+  std::vector<TargetMode> target_modes_;
   sensor::Sensor *current_temp_{nullptr};
   sensor::Sensor *action_sens_{nullptr};
   select::Select *select_presets_{nullptr};

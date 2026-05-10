@@ -37,6 +37,10 @@ ClimateActionMap = samsung_nasa_ns.class_("ClimateActionMap")
 CLIMATE_POWER_SWITCH_ID = "power_switch_id"
 CLIMATE_CURRENT_TEMP_ID = "current_temp_sensor_id"
 CLIMATE_TARGET_TEMP_ID = "target_temp_number_id"
+CLIMATE_TARGET_MODE_SELECT_ID = "target_mode_select_id"
+CLIMATE_TARGET_MODES = "target_modes"
+CLIMATE_TARGET_MODE_NAME = "name"
+CLIMATE_TARGET_MODE_SELECT_OPTION = "select_option"
 CLIMATE_ACTION_SENSOR = "action_mode_sensor"
 CLIMATE_CUSTOM_PRESET_SELECT_ID = "custom_preset_select_id"
 CLIMATE_ACTION_MAPPINGS_ID = "mappings_id"
@@ -68,6 +72,14 @@ CLIMATE_ACTION_MAPPING_SCHEMA = cv.Schema(
     }
 )
 
+CLIMATE_TARGET_MODE_SCHEMA = cv.Schema(
+    {
+        cv.Required(CLIMATE_TARGET_MODE_NAME): cv.string_strict,
+        cv.Required(CLIMATE_TARGET_MODE_SELECT_OPTION): cv.string_strict,
+        cv.Required(CLIMATE_TARGET_TEMP_ID): cv.use_id(number.Number),
+    }
+)
+
 CONFIG_SCHEMA = cv.Schema(
     climate.climate_schema(NASA_Climate)
     .extend(
@@ -76,6 +88,8 @@ CONFIG_SCHEMA = cv.Schema(
             cv.Optional(CLIMATE_POWER_SWITCH_ID): cv.use_id(switch.Switch),
             cv.Optional(CLIMATE_CURRENT_TEMP_ID): cv.use_id(sensor.Sensor),
             cv.Optional(CLIMATE_TARGET_TEMP_ID): cv.use_id(number.Number),
+            cv.Optional(CLIMATE_TARGET_MODE_SELECT_ID): cv.use_id(select.Select),
+            cv.Optional(CLIMATE_TARGET_MODES): cv.ensure_list(CLIMATE_TARGET_MODE_SCHEMA),
             cv.Optional(CLIMATE_ACTION_SENSOR): CLIMATE_ACTION_MAPPING_SCHEMA,
             cv.Optional(CLIMATE_CUSTOM_PRESET_SELECT_ID): cv.use_id(select.Select)
         }
@@ -112,6 +126,17 @@ async def to_code(config):
     if CLIMATE_TARGET_TEMP_ID in config:
         target = await cg.get_variable(config[CLIMATE_TARGET_TEMP_ID])
         cg.add(var.set_target_temp(target))
+    if CLIMATE_TARGET_MODE_SELECT_ID in config:
+        target_mode_select = await cg.get_variable(config[CLIMATE_TARGET_MODE_SELECT_ID])
+        cg.add(var.set_target_mode_select(target_mode_select))
+    if CLIMATE_TARGET_MODES in config:
+        for target_mode in config[CLIMATE_TARGET_MODES]:
+            target = await cg.get_variable(target_mode[CLIMATE_TARGET_TEMP_ID])
+            cg.add(var.add_target_mode(
+                target_mode[CLIMATE_TARGET_MODE_NAME],
+                target_mode[CLIMATE_TARGET_MODE_SELECT_OPTION],
+                target
+            ))
     if CLIMATE_CUSTOM_PRESET_SELECT_ID in config:
         custpre = await cg.get_variable(config[CLIMATE_CUSTOM_PRESET_SELECT_ID])
         cg.add(var.set_custom_preset_select(custpre))
@@ -128,4 +153,3 @@ async def to_code(config):
 
 
     
-

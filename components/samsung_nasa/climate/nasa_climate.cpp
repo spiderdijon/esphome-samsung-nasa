@@ -2,6 +2,7 @@
 #include "../nasa.h"
 #include "esphome/components/climate/climate.h"
 #include "esphome/core/log.h"
+#include <cmath>
 #include <vector>
 
 namespace esphome {
@@ -11,8 +12,19 @@ void NASA_Climate::setup() {
   if (this->power_ != nullptr) {
     this->power_->add_on_state_callback([this](bool state) { this->on_power(state); });
   }
-  if (this->target_temp_ != nullptr) {
-    this->target_temp_->add_on_state_callback([this](float state) { this->on_target_temp(state); });
+  if (!this->target_modes_.empty()) {
+    for (auto &target_mode : this->target_modes_) {
+      auto *target = target_mode.target_temp;
+      if (target != nullptr) {
+        target->add_on_state_callback([this, target](float state) { this->on_target_temp(target, state); });
+      }
+    }
+  } else if (this->target_temp_ != nullptr) {
+    this->target_temp_->add_on_state_callback([this](float state) { this->on_target_temp(this->target_temp_, state); });
+  }
+  if (this->target_mode_select_ != nullptr) {
+    this->target_mode_select_->add_on_state_callback(
+        [this](std::string state, size_t index) { this->on_target_mode_select(state, index); });
   }
   if (this->current_temp_ != nullptr) {
     this->current_temp_->add_on_state_callback([this](float state) { this->on_current_temp(state); });
@@ -26,14 +38,19 @@ void NASA_Climate::setup() {
   }
 }
 
+void NASA_Climate::add_target_mode(const std::string &preset, const std::string &select_option,
+                                   number::Number *target_temp) {
+  this->target_modes_.push_back(TargetMode{preset, select_option, target_temp});
+}
+
 void NASA_Climate::on_power(bool state) {
   auto new_mode = state ? climate::ClimateMode::CLIMATE_MODE_HEAT : climate::ClimateMode::CLIMATE_MODE_OFF;
   if (this->update_mode(new_mode))
     this->publish_state();
 }
 
-void NASA_Climate::on_target_temp(float state) {
-  if (this->update_target_temp(state))
+void NASA_Climate::on_target_temp(number::Number *source, float state) {
+  if (source == this->active_target_temp_() && this->update_target_temp(state))
     this->publish_state();
 }
 
@@ -45,6 +62,18 @@ void NASA_Climate::on_current_temp(float state) {
 void NASA_Climate::on_preset_select(std::string state, size_t index) {
   if (this->update_custom_preset(state.c_str()))
     this->publish_state();
+}
+
+void NASA_Climate::on_target_mode_select(std::string state, size_t index) {
+  for (auto const &target_mode : this->target_modes_) {
+    if (state == target_mode.select_option) {
+      auto update = this->update_custom_preset(target_mode.preset.c_str());
+      update |= this->update_target_temp_from_(target_mode.target_temp);
+      if (update)
+        this->publish_state();
+      return;
+    }
+  }
 }
 
 void NASA_Climate::on_action_sens(float state) {
@@ -72,22 +101,39 @@ void NASA_Climate::control(const climate::ClimateCall &call) {
       update = true;
     }
   }
-  if (call.get_target_temperature().has_value()) {
-    auto updated = this->update_target_temp(*call.get_target_temperature());
-    if (this->target_temp_ != nullptr && updated) {
-      auto call = this->target_temp_->make_call();
-      call.set_value(this->target_temperature);
-      call.perform();
-      update = true;
+  if (call.has_custom_preset()) {
+    auto target_mode_updated = false;
+    for (auto const &target_mode : this->target_modes_) {
+      if (target_mode.preset == call.get_custom_preset()) {
+        target_mode_updated = true;
+        update |= this->update_custom_preset(target_mode.preset.c_str());
+        if (this->target_mode_select_ != nullptr && this->target_mode_select_->current_option() != target_mode.select_option) {
+          auto select_call = this->target_mode_select_->make_call();
+          select_call.set_option(target_mode.select_option);
+          select_call.perform();
+        }
+        update |= this->update_target_temp_from_(target_mode.target_temp);
+        break;
+      }
+    }
+    if (!target_mode_updated) {
+      auto updated = this->update_custom_preset(call.get_custom_preset());
+      if (this->select_presets_ != nullptr && updated) {
+        auto call = this->select_presets_->make_call();
+        call.set_option(this->get_custom_preset());
+        call.perform();
+        this->preset.reset();
+        update = true;
+      }
     }
   }
-  if (call.has_custom_preset()) {
-    auto updated = this->update_custom_preset(call.get_custom_preset());
-    if (this->select_presets_ != nullptr && updated) {
-      auto call = this->select_presets_->make_call();
-      call.set_option(this->get_custom_preset());
-      call.perform();
-      this->preset.reset();
+  if (call.get_target_temperature().has_value()) {
+    auto updated = this->update_target_temp(*call.get_target_temperature());
+    auto *target_temp = this->active_target_temp_();
+    if (target_temp != nullptr && updated) {
+      auto number_call = target_temp->make_call();
+      number_call.set_value(this->target_temperature);
+      number_call.perform();
       update = true;
     }
   }
@@ -131,15 +177,50 @@ bool NASA_Climate::update_custom_preset(const char *new_value) {
     return this->set_custom_preset_(new_value);
 }
 
+number::Number *NASA_Climate::active_target_temp_() {
+  if (this->target_modes_.empty())
+    return this->target_temp_;
+
+  if (this->target_mode_select_ != nullptr) {
+    for (auto const &target_mode : this->target_modes_) {
+      if (this->target_mode_select_->current_option() == target_mode.select_option)
+        return target_mode.target_temp;
+    }
+  }
+
+  auto current_preset = this->get_custom_preset();
+  for (auto const &target_mode : this->target_modes_) {
+    if (target_mode.preset == current_preset)
+      return target_mode.target_temp;
+  }
+
+  return this->target_modes_.front().target_temp;
+}
+
+bool NASA_Climate::update_target_temp_from_(number::Number *target) {
+  if (target == nullptr || std::isnan(target->state))
+    return false;
+  return this->update_target_temp(target->state);
+}
+
 climate::ClimateTraits NASA_Climate::traits() {
   climate::ClimateTraits traits{};
   traits.add_feature_flags(climate::CLIMATE_SUPPORTS_CURRENT_TEMPERATURE);
   traits.add_feature_flags(climate::CLIMATE_SUPPORTS_ACTION);
   traits.set_supported_modes({climate::CLIMATE_MODE_OFF, climate::CLIMATE_MODE_HEAT});
   traits.set_supported_presets({});
-  if (this->select_presets_ != nullptr) {
-    const auto &presets = this->select_presets_->traits.get_options();
-    traits.set_supported_custom_presets(std::vector(presets.begin(), presets.end()));
+  if (!this->target_modes_.empty()) {
+    std::vector<const char *> presets;
+    for (auto const &target_mode : this->target_modes_) {
+      presets.push_back(target_mode.preset.c_str());
+    }
+    traits.set_supported_custom_presets(presets);
+  } else if (this->select_presets_ != nullptr) {
+    std::vector<const char *> presets;
+    for (const auto &preset : this->select_presets_->traits.get_options()) {
+      presets.push_back(preset);
+    }
+    traits.set_supported_custom_presets(presets);
   }
   return traits;
 }
